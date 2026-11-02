@@ -852,8 +852,8 @@ static void drawControls() {
                     (double)A.gridDims[0] * A.gridDims[1] * A.gridDims[2] * (19 * 2 + 4 + 1) * 4 / 1e6);
         if (ImGui::Button("Rebuild domain")) rebuildDomain();
     }
-    if (ImGui::CollapsingHeader("Run", ImGuiTreeNodeFlags_DefaultOpen)) {
-        if (ImGui::Button(A.running ? "Pause" : "Run", ImVec2(80, 0))) A.running = !A.running;
+    if (ImGui::CollapsingHeader("Simulation", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGui::Button(A.running ? "Pause" : "Run", ImVec2(100, 0))) A.running = !A.running;
         ImGui::SameLine();
         if (ImGui::Button("Reset flow")) { s.resetFlow(A.uLB); A.hCd.clear(); A.hCl.clear(); }
         ImGui::SliderFloat("Budget (ms/frame)", &A.budgetMs, 2.f, 100.f, "%.0f");
@@ -941,12 +941,12 @@ static void drawViewport() {
         ImGuiIO& io = ImGui::GetIO();
         if (ImGui::IsItemActive()) {
             if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-                A.camYaw -= io.MouseDelta.x * 0.005f;
+                A.camYaw += io.MouseDelta.x * 0.005f;
                 A.camPitch = std::clamp(A.camPitch + io.MouseDelta.y * 0.005f, -1.5f, 1.5f);
             } else if (ImGui::IsMouseDown(ImGuiMouseButton_Right) || ImGui::IsMouseDown(ImGuiMouseButton_Middle)) {
                 vec3 eye = vec3(std::cos(A.camPitch) * std::cos(A.camYaw), std::sin(A.camPitch), std::cos(A.camPitch) * std::sin(A.camYaw));
                 vec3 right = glm::normalize(glm::cross(vec3(0, 1, 0), eye)), up = glm::cross(eye, right);
-                A.camTarget += (right * io.MouseDelta.x + up * io.MouseDelta.y) * (A.camDist * 0.0015f);
+                A.camTarget += (-right * io.MouseDelta.x + up * io.MouseDelta.y) * (A.camDist * 0.0015f);
             }
         }
         if (ImGui::IsItemHovered() && io.MouseWheel != 0.f) A.camDist = std::clamp(A.camDist * (1.f - 0.1f * io.MouseWheel), 5.f, 3000.f);

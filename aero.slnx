@@ -3,5 +3,5 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
-  <Project Path="aero/aero.vcxproj" />
+  <Project Path="aero/aero.vcxproj" Id="c05f0621-663a-43c0-8ba4-3716ee2f4756" />
 </Solution>

@@ -28,7 +28,7 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
-    <PlatformToolset>v145</PlatformToolset>
+    <PlatformToolset>v143</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)'=='Debug'" Label="Configuration">
@@ -47,7 +47,6 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
-
   <!-- Everything third-party is vendored in ..\include: imgui, glm, ufbx, Khronos GL headers. -->
   <ItemDefinitionGroup>
     <ClCompile>
@@ -85,7 +84,6 @@
       <PreprocessorDefinitions>WIN32;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
   </ItemDefinitionGroup>
-
   <ItemGroup>
     <ClCompile Include="main.cpp" />
     <ClCompile Include="gl_loader.cpp" />
