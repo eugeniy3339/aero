@@ -559,13 +559,22 @@ static void drawResults() {
 
     ImGui::SeparatorText("Flow");
     const FlowScaling fs = flowScaling();
+    const double blockage = (double)A.vox.areaFront / ((double)s.ny * s.nz);
     if (ImGui::BeginTable("##flowinfo", 2, ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_RowBg)) {
         valueRow("Re (physical)", "%.3g", fs.Re);
         valueRow("Re (simulated)", "%.3g%s", fs.ReSim, fs.ReSim < fs.Re * 0.99f ? " (LES)" : "");
         valueRow("Mach (lattice)", "%.3f", fs.mach);
         valueRow("Relaxation \xCF\x84" "0", "%.4f", fs.tau0);
-        valueRow("Solid cells", "%lld", A.solidCount);
+        valueRow("Solid cells", "%lld", A.vox.solidCells);
+        valueRow("Blockage", "%.1f %%", blockage * 100.0);
         ImGui::EndTable();
+    }
+    // Validation against a sphere at Re 100: ~6% extra Cd at 5.5% blockage vs 1.4%; worse beyond.
+    if (blockage > 0.05) {
+        ImGui::PushStyleColor(ImGuiCol_Text, blockage > 0.10 ? COL_ERROR : COL_WARN);
+        ImGui::TextWrapped("The model fills %.0f%% of the tunnel cross-section, which inflates Cd%s. "
+                           "Aim for under 5%%: shrink Length (cells) or enlarge the grid.", blockage * 100.0, blockage > 0.10 ? " strongly" : "");
+        ImGui::PopStyleColor();
     }
     if (fs.ReSim < fs.Re * 0.99f)
         ImGui::TextWrapped("The grid cannot resolve the physical Re; the solver runs at a lower Re and relies on the LES model.");

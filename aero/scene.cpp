@@ -83,7 +83,7 @@ FlowScaling flowScaling() {
 Forces forces() {
     const Sim& s = A.sim;
     Forces r;
-    const int Acells = A.refMode == Ref_Frontal ? A.areaFront : A.areaPlan;
+    const int Acells = A.refMode == Ref_Frontal ? A.vox.areaFront : A.vox.areaPlan;
     const double dx = A.modelSizeM / A.lenCells;
     const double qLB = 0.5 * s.uLB * s.uLB * Acells, qPh = 0.5 * A.rhoAir * A.wind * A.wind;
     r.Aref = Acells * dx * dx;
@@ -94,57 +94,6 @@ Forces forces() {
 
 int sliceCount() {
     return A.sliceAxis == 0 ? A.sim.nx : A.sliceAxis == 1 ? A.sim.ny : A.sim.nz;
-}
-
-// ============================================================================
-//  Voxelisation
-// ============================================================================
-static void voxelize() {
-    Sim& s = A.sim; const int nx = s.nx, ny = s.ny, nz = s.nz;
-    std::vector<uint8_t> shell(s.N, 0);
-    for (size_t t = 0; t + 2 < A.model.idx.size(); t += 3) {
-        vec3 a = A.gridPos[A.model.idx[t]], b = A.gridPos[A.model.idx[t + 1]], c = A.gridPos[A.model.idx[t + 2]];
-        vec3 mn = glm::min(glm::min(a, b), c), mx = glm::max(glm::max(a, b), c);
-        if (mx.x < 0 || mx.y < 0 || mx.z < 0 || mn.x >= nx || mn.y >= ny || mn.z >= nz) continue;
-        float L = std::max({glm::length(b - a), glm::length(c - a), glm::length(c - b)});
-        int n = std::clamp((int)std::ceil(L / 0.35f), 1, 3000);    // sample spacing < 0.35 cell -> 26-connected shell
-        for (int i = 0; i <= n; ++i) for (int j = 0; j <= n - i; ++j) {
-            vec3 p = a + (b - a) * (i / (float)n) + (c - a) * (j / (float)n);
-            int x = (int)std::floor(p.x), y = (int)std::floor(p.y), z = (int)std::floor(p.z);
-            if (x < 0 || y < 0 || z < 0 || x >= nx || y >= ny || z >= nz) continue;
-            shell[s.id(x, y, z)] = 1;
-        }
-    }
-    // Flood-fill the outside from the domain border (6-connected, so a 26-connected shell is watertight)
-    std::vector<uint8_t> outside(s.N, 0);
-    std::vector<uint32_t> st;
-    auto push = [&](int x, int y, int z) {
-        size_t i = s.id(x, y, z);
-        if (!outside[i] && !shell[i]) { outside[i] = 1; st.push_back((uint32_t)i); }
-    };
-    for (int z = 0; z < nz; ++z) for (int y = 0; y < ny; ++y) for (int x = 0; x < nx; ++x) {
-        bool border = x == 0 || y == 0 || z == 0 || x == nx - 1 || y == ny - 1 || z == nz - 1;
-        if (border) { shell[s.id(x, y, z)] = 0; push(x, y, z); }
-    }
-    while (!st.empty()) {
-        uint32_t i = st.back(); st.pop_back();
-        int x = i % nx, y = (i / nx) % ny, z = (int)(i / ((size_t)nx * ny));
-        if (x > 0) push(x - 1, y, z);
-        if (x < nx - 1) push(x + 1, y, z);
-        if (y > 0) push(x, y - 1, z);
-        if (y < ny - 1) push(x, y + 1, z);
-        if (z > 0) push(x, y, z - 1);
-        if (z < nz - 1) push(x, y, z + 1);
-    }
-    std::vector<uint8_t> pyz((size_t)ny * nz, 0), pxz((size_t)nx * nz, 0);
-    A.solidCount = 0;
-    for (int z = 0; z < nz; ++z) for (int y = 0; y < ny; ++y) for (int x = 0; x < nx; ++x) {
-        size_t i = s.id(x, y, z);
-        s.solid[i] = outside[i] ? 0 : 1;
-        if (s.solid[i]) { ++A.solidCount; pyz[y + (size_t)ny * z] = 1; pxz[x + (size_t)nx * z] = 1; }
-    }
-    A.areaFront = std::max(1, (int)std::count(pyz.begin(), pyz.end(), 1));
-    A.areaPlan  = std::max(1, (int)std::count(pxz.begin(), pxz.end(), 1));
 }
 
 // ============================================================================
@@ -172,7 +121,7 @@ void applyModel() {
     }
     A.vcol.assign(n, vec3(0.7f));
     A.mesh.upload(A.gridPos, A.gridNrm, A.vcol, A.model.idx);
-    voxelize();
+    A.vox = A.sim.voxelize(A.gridPos, A.model.idx);
     resetFlow();
 }
 

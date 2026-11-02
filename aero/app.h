@@ -60,7 +60,7 @@ struct App {
     // model
     char path[1024] = "";
     int builtin = Builtin_Sphere;
-    float modelSizeM = 1.0f, lenCells = 40.f, posX = 0.30f, yaw = 0, pitch = 0, roll = 0;
+    float modelSizeM = 1.0f, lenCells = 20.f, posX = 0.30f, yaw = 0, pitch = 0, roll = 0;
     bool zUp = false;
     int gridDims[3] = {128, 64, 64};
     // flow
@@ -74,7 +74,7 @@ struct App {
     float speedMax = 1.6f, cpRange = 1.5f, vortMax = 6.f, sliceAlpha = 0.85f;
     int colorMode = Surface_Solid; int cpFrame = 0;
     // voxel stats
-    long long solidCount = 0; int areaFront = 1, areaPlan = 1;
+    VoxelStats vox;
     OrbitCamera cam;
     std::vector<float> hCd, hCl;    // coefficient history, one sample per frame while running
     // GL

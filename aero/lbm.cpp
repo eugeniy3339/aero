@@ -160,3 +160,98 @@ void Sim::step() {
             if (!std::isfinite(rho[i]) || rho[i] < 0.2f || rho[i] > 3.f) { diverged = true; break; }
     }
 }
+
+// ============================================================================
+//  Voxelisation
+// ============================================================================
+VoxelStats Sim::voxelize(const std::vector<vec3>& pos, const std::vector<unsigned>& idx, bool cellCentres) {
+    Sim& s = *this;
+    VoxelStats r;
+    std::vector<uint8_t> shell(s.N, 0);
+    for (size_t t = 0; t + 2 < idx.size(); t += 3) {
+        vec3 a = pos[idx[t]], b = pos[idx[t + 1]], c = pos[idx[t + 2]];
+        vec3 mn = glm::min(glm::min(a, b), c), mx = glm::max(glm::max(a, b), c);
+        if (mx.x < 0 || mx.y < 0 || mx.z < 0 || mn.x >= nx || mn.y >= ny || mn.z >= nz) continue;
+        float L = std::max({glm::length(b - a), glm::length(c - a), glm::length(c - b)});
+        int n = std::clamp((int)std::ceil(L / 0.35f), 1, 3000);    // sample spacing < 0.35 cell -> 26-connected shell
+        for (int i = 0; i <= n; ++i) for (int j = 0; j <= n - i; ++j) {
+            vec3 p = a + (b - a) * (i / (float)n) + (c - a) * (j / (float)n);
+            int x = (int)std::floor(p.x), y = (int)std::floor(p.y), z = (int)std::floor(p.z);
+            if (x < 0 || y < 0 || z < 0 || x >= nx || y >= ny || z >= nz) continue;
+            shell[s.id(x, y, z)] = 1;
+        }
+    }
+    // Flood-fill the outside from the domain border (6-connected, so a 26-connected shell is watertight)
+    std::vector<uint8_t> outside(s.N, 0);
+    std::vector<uint32_t> st;
+    auto push = [&](int x, int y, int z) {
+        size_t i = s.id(x, y, z);
+        if (!outside[i] && !shell[i]) { outside[i] = 1; st.push_back((uint32_t)i); }
+    };
+    for (int z = 0; z < nz; ++z) for (int y = 0; y < ny; ++y) for (int x = 0; x < nx; ++x) {
+        bool border = x == 0 || y == 0 || z == 0 || x == nx - 1 || y == ny - 1 || z == nz - 1;
+        if (border) { shell[s.id(x, y, z)] = 0; push(x, y, z); }
+    }
+    while (!st.empty()) {
+        uint32_t i = st.back(); st.pop_back();
+        int x = i % nx, y = (i / nx) % ny, z = (int)(i / ((size_t)nx * ny));
+        if (x > 0) push(x - 1, y, z);
+        if (x < nx - 1) push(x + 1, y, z);
+        if (y > 0) push(x, y - 1, z);
+        if (y < ny - 1) push(x, y + 1, z);
+        if (z > 0) push(x, y, z - 1);
+        if (z < nz - 1) push(x, y, z + 1);
+    }
+
+    // The shell over-marks: any cell the surface touches is solid, which fattens the body by
+    // ~half a cell all round. Re-classify shell cells by whether their centre is inside the mesh,
+    // using crossing parity along an x ray through each (y, z) row of cell centres. Rows with an
+    // odd crossing count (open or broken meshes) keep the conservative shell.
+    if (cellCentres) {
+        const float oy = 0.5f + 1.3e-4f, oz = 0.5f + 2.7e-4f;      // nudge rays off vertices / edges
+        std::vector<std::vector<float>> hits((size_t)ny * nz);
+        for (size_t t = 0; t + 2 < idx.size(); t += 3) {
+            const vec3 a = pos[idx[t]], b = pos[idx[t + 1]], c = pos[idx[t + 2]];
+            const float det = (b.y - a.y) * (c.z - a.z) - (c.y - a.y) * (b.z - a.z);
+            if (std::fabs(det) < 1e-12f) continue;                  // edge-on to the ray
+            const int y0 = std::max(0, (int)std::ceil(std::min({a.y, b.y, c.y}) - oy));
+            const int y1 = std::min(ny - 1, (int)std::floor(std::max({a.y, b.y, c.y}) - oy));
+            const int z0 = std::max(0, (int)std::ceil(std::min({a.z, b.z, c.z}) - oz));
+            const int z1 = std::min(nz - 1, (int)std::floor(std::max({a.z, b.z, c.z}) - oz));
+            for (int z = z0; z <= z1; ++z) for (int y = y0; y <= y1; ++y) {
+                const float py = y + oy - a.y, pz = z + oz - a.z;
+                const float u = (py * (c.z - a.z) - (c.y - a.y) * pz) / det;
+                const float v = ((b.y - a.y) * pz - py * (b.z - a.z)) / det;
+                if (u < 0 || v < 0 || u + v > 1) continue;
+                hits[y + (size_t)ny * z].push_back(a.x + u * (b.x - a.x) + v * (c.x - a.x));
+            }
+        }
+        std::vector<size_t> cleared;
+        for (int z = 0; z < nz; ++z) for (int y = 0; y < ny; ++y) {
+            std::vector<float>& h = hits[y + (size_t)ny * z];
+            if (h.size() % 2) continue;
+            std::sort(h.begin(), h.end());
+            for (int x = 0; x < nx; ++x) {
+                const size_t i = s.id(x, y, z);
+                if (!shell[i] || outside[i]) continue;
+                const size_t before = std::lower_bound(h.begin(), h.end(), x + 0.5f) - h.begin();
+                if (before % 2 == 0) cleared.push_back(i);
+            }
+        }
+        // Keep the shell if re-classification would erase the body (thinner than a cell everywhere).
+        size_t solidBefore = 0;
+        for (size_t i = 0; i < s.N; ++i) solidBefore += !outside[i];
+        if (cleared.size() < solidBefore)
+            for (size_t i : cleared) outside[i] = 1;
+    }
+
+    std::vector<uint8_t> pyz((size_t)ny * nz, 0), pxz((size_t)nx * nz, 0);
+    for (int z = 0; z < nz; ++z) for (int y = 0; y < ny; ++y) for (int x = 0; x < nx; ++x) {
+        size_t i = s.id(x, y, z);
+        s.solid[i] = outside[i] ? 0 : 1;
+        if (s.solid[i]) { ++r.solidCells; pyz[y + (size_t)ny * z] = 1; pxz[x + (size_t)nx * z] = 1; }
+    }
+    r.areaFront = std::max(1, (int)std::count(pyz.begin(), pyz.end(), 1));
+    r.areaPlan  = std::max(1, (int)std::count(pxz.begin(), pxz.end(), 1));
+    return r;
+}

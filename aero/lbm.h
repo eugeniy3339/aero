@@ -9,6 +9,9 @@
 #include <cstdint>
 #include <vector>
 
+// Result of voxelising a mesh: solid cell count and projected areas (in cells).
+struct VoxelStats { long long solidCells = 0; int areaFront = 1, areaPlan = 1; };
+
 struct Smp { float rho = 1.f; glm::vec3 u{0.f}; bool ok = false; };
 
 struct Sim {
@@ -34,6 +37,11 @@ struct Sim {
 
     // One fused pull-stream + collide step. Interior only; domain faces are boundary cells.
     void step();
+
+    // Marks cells inside the triangle mesh (positions in grid units) as solid. With cellCentres,
+    // cells cut by the surface are solid only if their centre is inside; otherwise every cell the
+    // surface touches is solid (fatter body, but robust for thin or open meshes).
+    VoxelStats voxelize(const std::vector<glm::vec3>& pos, const std::vector<unsigned>& idx, bool cellCentres = true);
 
     // Domain lengths travelled by the free stream since the last reset.
     double flowThroughs() const { return nx > 0 ? steps * (double)uLB / nx : 0.0; }
