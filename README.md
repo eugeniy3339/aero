@@ -1,5 +1,7 @@
 # AeroLBM
 
+> **Disclaimer:** This is a personal test project exploring the possibilities of AI.
+
 AeroLBM is a Windows desktop virtual wind tunnel for exploring airflow around 3D models. It combines a lattice-Boltzmann flow solver with an interactive OpenGL viewport and a Dear ImGui control panel.
 
 ## Download
