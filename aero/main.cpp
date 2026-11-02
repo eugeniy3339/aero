@@ -12,6 +12,9 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <shellapi.h>         // drag & drop
+#include <commdlg.h>           // open file dialog
+
+#pragma comment(lib, "Comdlg32.lib")
 
 #include "gl_loader.h"
 
@@ -247,6 +250,30 @@ static std::wstring widen(const std::string& s) {
     std::wstring w(n, L'\0');
     MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), w.data(), n);
     return w;
+}
+
+static std::string narrow(const std::wstring& s) {
+    int n = WideCharToMultiByte(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0, nullptr, nullptr);
+    std::string out(n, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, s.c_str(), (int)s.size(), out.data(), n, nullptr, nullptr);
+    return out;
+}
+
+static bool pickModelFile(HWND owner, char* path, size_t pathSize) {
+    wchar_t file[32768] = {};
+    OPENFILENAMEW ofn = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = owner;
+    ofn.lpstrFilter = L"3D models (*.fbx;*.obj;*.stl)\0*.fbx;*.obj;*.stl\0All files (*.*)\0*.*\0\0";
+    ofn.lpstrFile = file;
+    ofn.nMaxFile = (DWORD)_countof(file);
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    ofn.lpstrTitle = L"Select a 3D model";
+    if (!GetOpenFileNameW(&ofn)) return false;
+    std::string selected = narrow(file);
+    if (selected.size() >= pathSize) return false;
+    std::memcpy(path, selected.c_str(), selected.size() + 1);
+    return true;
 }
 static std::string narrow(const wchar_t* w) {
     int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
@@ -824,6 +851,9 @@ static void drawControls() {
     auto commit = [&]() { if (ImGui::IsItemDeactivatedAfterEdit()) A.dirty = true; };
 
     if (ImGui::CollapsingHeader("Model", ImGuiTreeNodeFlags_DefaultOpen)) {
+        if (ImGui::Button("Pick file")) pickModelFile(A.hwnd, A.path, sizeof(A.path));
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(-65.f);
         ImGui::InputText("##path", A.path, sizeof(A.path)); ImGui::SameLine();
         if (ImGui::Button("Load")) loadAndApply(A.path);
         ImGui::TextDisabled("or drag & drop a file onto the window");
