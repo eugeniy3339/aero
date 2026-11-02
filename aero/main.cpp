@@ -1,31 +1,33 @@
 // ============================================================================
 //  AeroLBM - virtual wind tunnel
-//  - Import .fbx (and obj/glb/gltf/dae/3ds/stl...) through Assimp
+//  - Import .fbx / .obj (ufbx) and .stl (built-in reader)
 //  - Voxelises the mesh into a 3D lattice-Boltzmann domain (D3Q19, BGK + Smagorinsky LES)
 //  - Drag / lift / side force via momentum-exchange method
 //  - Visualisation: velocity/pressure/vorticity slice, streamline trails, surface Cp
 //  - UI: Dear ImGui (docking branch), 3D view rendered into a dockable viewport
+//  - Windows only: Win32 window + WGL OpenGL 3.3 core context
 //
 //  Flow direction is +X, "up" (lift) is +Y.
 // ============================================================================
-#include <GL/glew.h>
-#include <GLFW/glfw3.h>
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <shellapi.h>         // drag & drop
+
+#include "gl_loader.h"
 
 #include "imgui.h"
 #include "imgui_internal.h"   // DockBuilder
-#include "imgui_impl_glfw.h"
+#include "imgui_impl_win32.h"
 #include "imgui_impl_opengl3.h"
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 
-#include <assimp/Importer.hpp>
-#include <assimp/scene.h>
-#include <assimp/postprocess.h>
-#include <assimp/config.h>
+#include <ufbx/ufbx.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cfloat>
 #include <cmath>
 #include <cstdint>
@@ -33,6 +35,7 @@
 #include <cstring>
 #include <random>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 using glm::vec2; using glm::vec3; using glm::vec4; using glm::mat3; using glm::mat4;
@@ -239,29 +242,95 @@ static void computeNormals(Model& m) {
     for (auto& n : m.n0) { float l = glm::length(n); n = l > 1e-12f ? n / l : vec3(0, 1, 0); }
 }
 
-static bool loadFile(const std::string& path, Model& out, std::string& err) {
-    Assimp::Importer imp;
-    imp.SetPropertyBool(AI_CONFIG_IMPORT_FBX_PRESERVE_PIVOTS, false);
-    const aiScene* sc = imp.ReadFile(path,
-        aiProcess_Triangulate | aiProcess_JoinIdenticalVertices | aiProcess_GenSmoothNormals |
-        aiProcess_PreTransformVertices | aiProcess_FindDegenerates);
-    if (!sc || !sc->mNumMeshes) { err = imp.GetErrorString(); if (err.empty()) err = "file contains no meshes"; return false; }
-    Model m; m.name = path;
-    for (unsigned mi = 0; mi < sc->mNumMeshes; ++mi) {
-        const aiMesh* am = sc->mMeshes[mi];
+static std::wstring widen(const std::string& s) {
+    int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0);
+    std::wstring w(n, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), w.data(), n);
+    return w;
+}
+static std::string narrow(const wchar_t* w) {
+    int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0, nullptr, nullptr);
+    std::string s(n > 0 ? n - 1 : 0, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w, -1, s.data(), n, nullptr, nullptr);
+    return s;
+}
+
+// FBX / OBJ via ufbx. Every mesh instance is baked into world space (Y-up); vertices are
+// shared per mesh position so the normals come out smooth.
+static bool loadUfbx(const std::string& path, Model& m, std::string& err) {
+    ufbx_load_opts opts = {};
+    opts.target_axes = ufbx_axes_right_handed_y_up;
+    ufbx_error uerr;
+    ufbx_scene* sc = ufbx_load_file(path.c_str(), &opts, &uerr);
+    if (!sc) { char buf[512]; ufbx_format_error(buf, sizeof(buf), &uerr); err = buf; return false; }
+    std::vector<uint32_t> tri;
+    for (size_t ni = 0; ni < sc->nodes.count; ++ni) {
+        const ufbx_node* node = sc->nodes.data[ni];
+        const ufbx_mesh* mesh = node->mesh;
+        if (!mesh) continue;
         unsigned base = (unsigned)m.p0.size();
-        for (unsigned v = 0; v < am->mNumVertices; ++v) {
-            m.p0.emplace_back(am->mVertices[v].x, am->mVertices[v].y, am->mVertices[v].z);
-            if (am->HasNormals()) m.n0.emplace_back(am->mNormals[v].x, am->mNormals[v].y, am->mNormals[v].z);
-            else m.n0.emplace_back(0, 1, 0);
+        for (size_t v = 0; v < mesh->vertices.count; ++v) {
+            ufbx_vec3 p = ufbx_transform_position(&node->geometry_to_world, mesh->vertices.data[v]);
+            m.p0.emplace_back((float)p.x, (float)p.y, (float)p.z);
         }
-        for (unsigned fI = 0; fI < am->mNumFaces; ++fI) {
-            const aiFace& fc = am->mFaces[fI];
-            if (fc.mNumIndices != 3) continue;
-            m.idx.push_back(base + fc.mIndices[0]); m.idx.push_back(base + fc.mIndices[1]); m.idx.push_back(base + fc.mIndices[2]);
+        tri.resize(mesh->max_face_triangles * 3);
+        for (size_t fi = 0; fi < mesh->faces.count; ++fi) {
+            uint32_t nt = ufbx_triangulate_face(tri.data(), tri.size(), mesh, mesh->faces.data[fi]);
+            for (uint32_t k = 0; k < nt * 3; ++k) m.idx.push_back(base + mesh->vertex_indices.data[tri[k]]);
         }
     }
+    ufbx_free_scene(sc);
+    return true;
+}
+
+// Binary or ASCII STL. Identical corners are welded.
+static bool loadStl(const std::string& path, Model& m, std::string& err) {
+    FILE* fp = _wfopen(widen(path).c_str(), L"rb");
+    if (!fp) { err = "cannot open file"; return false; }
+    std::vector<char> data;
+    char chunk[65536]; size_t got;
+    while ((got = std::fread(chunk, 1, sizeof(chunk), fp)) > 0) data.insert(data.end(), chunk, chunk + got);
+    std::fclose(fp);
+
+    std::vector<vec3> corners;
+    uint32_t nTri = 0;
+    if (data.size() >= 84) std::memcpy(&nTri, &data[80], 4);
+    if (data.size() >= 84 && data.size() == 84 + (size_t)nTri * 50) {
+        for (uint32_t t = 0; t < nTri; ++t)
+            for (int k = 0; k < 3; ++k) {
+                float v[3]; std::memcpy(v, &data[84 + (size_t)t * 50 + 12 + k * 12], 12);
+                corners.emplace_back(v[0], v[1], v[2]);
+            }
+    } else {
+        data.push_back('\0');
+        const char* s = data.data();
+        while ((s = std::strstr(s, "vertex")) != nullptr) {
+            s += 6;
+            float x, y, z;
+            if (std::sscanf(s, "%f %f %f", &x, &y, &z) == 3) corners.emplace_back(x, y, z);
+        }
+        corners.resize(corners.size() / 3 * 3);
+    }
+    struct Key { uint32_t a, b, c; bool operator==(const Key& o) const { return a == o.a && b == o.b && c == o.c; } };
+    struct KeyHash { size_t operator()(const Key& k) const { return ((size_t)k.a * 73856093u) ^ ((size_t)k.b * 19349663u) ^ ((size_t)k.c * 83492791u); } };
+    std::unordered_map<Key, unsigned, KeyHash> weld;
+    for (const vec3& p : corners) {
+        Key k; std::memcpy(&k.a, &p.x, 4); std::memcpy(&k.b, &p.y, 4); std::memcpy(&k.c, &p.z, 4);
+        auto [it, inserted] = weld.try_emplace(k, (unsigned)m.p0.size());
+        if (inserted) m.p0.push_back(p);
+        m.idx.push_back(it->second);
+    }
+    return true;
+}
+
+static bool loadFile(const std::string& path, Model& out, std::string& err) {
+    Model m; m.name = path;
+    std::string ext = path.substr(std::min(path.size(), path.find_last_of('.')));
+    for (char& c : ext) c = (char)std::tolower((unsigned char)c);
+    bool ok = ext == ".stl" ? loadStl(path, m, err) : loadUfbx(path, m, err);
+    if (!ok) return false;
     if (m.idx.empty()) { err = "no triangles found"; return false; }
+    computeNormals(m);
     finalizeModel(m);
     out = std::move(m);
     return true;
@@ -440,7 +509,7 @@ struct Particles {
 };
 
 struct App {
-    GLFWwindow* win = nullptr;
+    HWND hwnd = nullptr; HDC hdc = nullptr; HGLRC glrc = nullptr;
     Sim sim; Model model; bool haveModel = false;
     GLMesh mesh; std::vector<vec3> gridPos, gridNrm, vcol;
     Particles part;
@@ -887,29 +956,89 @@ static void drawViewport() {
 }
 
 // ============================================================================
+//  Win32 window + WGL context
+// ============================================================================
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+static double nowSeconds() {
+    static const double invFreq = [] { LARGE_INTEGER f; QueryPerformanceFrequency(&f); return 1.0 / (double)f.QuadPart; }();
+    LARGE_INTEGER c; QueryPerformanceCounter(&c);
+    return (double)c.QuadPart * invFreq;
+}
+
+static LRESULT WINAPI wndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam)) return true;
+    switch (msg) {
+    case WM_DROPFILES: {
+        HDROP drop = (HDROP)wParam;
+        wchar_t buf[MAX_PATH * 4];
+        if (DragQueryFileW(drop, 0, buf, (UINT)std::size(buf))) g_drop = narrow(buf);
+        DragFinish(drop);
+        return 0;
+    }
+    case WM_SYSCOMMAND:
+        if ((wParam & 0xfff0) == SC_KEYMENU) return 0;   // disable ALT application menu
+        break;
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        return 0;
+    }
+    return DefWindowProcW(hWnd, msg, wParam, lParam);
+}
+
+// Core 3.3 context: a legacy context is needed first to fetch wglCreateContextAttribsARB.
+static bool createGLContext() {
+    constexpr int WGL_CONTEXT_MAJOR_VERSION_ARB = 0x2091, WGL_CONTEXT_MINOR_VERSION_ARB = 0x2092;
+    constexpr int WGL_CONTEXT_PROFILE_MASK_ARB = 0x9126, WGL_CONTEXT_CORE_PROFILE_BIT_ARB = 0x1;
+    using CreateCtxFn = HGLRC(WINAPI*)(HDC, HGLRC, const int*);
+    using SwapIntervalFn = BOOL(WINAPI*)(int);
+
+    A.hdc = GetDC(A.hwnd);
+    PIXELFORMATDESCRIPTOR pfd = {};
+    pfd.nSize = sizeof(pfd); pfd.nVersion = 1;
+    pfd.dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER;
+    pfd.iPixelType = PFD_TYPE_RGBA; pfd.cColorBits = 32; pfd.cDepthBits = 24; pfd.cStencilBits = 8;
+    int pf = ChoosePixelFormat(A.hdc, &pfd);
+    if (!pf || !SetPixelFormat(A.hdc, pf, &pfd)) return false;
+
+    HGLRC legacy = wglCreateContext(A.hdc);
+    if (!legacy || !wglMakeCurrent(A.hdc, legacy)) return false;
+    auto createCtx = (CreateCtxFn)wglGetProcAddress("wglCreateContextAttribsARB");
+    const int attribs[] = { WGL_CONTEXT_MAJOR_VERSION_ARB, 3, WGL_CONTEXT_MINOR_VERSION_ARB, 3,
+                            WGL_CONTEXT_PROFILE_MASK_ARB, WGL_CONTEXT_CORE_PROFILE_BIT_ARB, 0 };
+    A.glrc = createCtx ? createCtx(A.hdc, nullptr, attribs) : nullptr;
+    wglMakeCurrent(nullptr, nullptr); wglDeleteContext(legacy);
+    if (!A.glrc || !wglMakeCurrent(A.hdc, A.glrc)) return false;
+
+    if (auto swapInterval = (SwapIntervalFn)wglGetProcAddress("wglSwapIntervalEXT")) swapInterval(1);
+    return true;
+}
+
+// ============================================================================
 //  main
 // ============================================================================
 int main() {
     initLattice();
-    if (!glfwInit()) return 1;
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3); glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-#ifdef __APPLE__
-    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
-#endif
-    A.win = glfwCreateWindow(1600, 900, "AeroLBM - virtual wind tunnel", nullptr, nullptr);
-    if (!A.win) { glfwTerminate(); return 1; }
-    glfwMakeContextCurrent(A.win); glfwSwapInterval(1);
-    glfwSetDropCallback(A.win, [](GLFWwindow*, int n, const char** paths) { if (n > 0) g_drop = paths[0]; });
-    glewExperimental = GL_TRUE;
-    if (glewInit() != GLEW_OK) { std::fprintf(stderr, "GLEW init failed\n"); return 1; }
-    glGetError();   // swallow GLEW's spurious error on core profiles
+    ImGui_ImplWin32_EnableDpiAwareness();
+    const float dpi = ImGui_ImplWin32_GetDpiScaleForMonitor(MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY));
+
+    WNDCLASSEXW wc = { sizeof(wc), CS_OWNDC, wndProc, 0, 0, GetModuleHandleW(nullptr), nullptr,
+                       LoadCursor(nullptr, IDC_ARROW), nullptr, nullptr, L"AeroLBM", nullptr };
+    RegisterClassExW(&wc);
+    A.hwnd = CreateWindowExW(WS_EX_ACCEPTFILES, wc.lpszClassName, L"AeroLBM - virtual wind tunnel", WS_OVERLAPPEDWINDOW,
+                             CW_USEDEFAULT, CW_USEDEFAULT, (int)(1600 * dpi), (int)(900 * dpi), nullptr, nullptr, wc.hInstance, nullptr);
+    if (!A.hwnd) return 1;
+    if (!createGLContext()) { std::fprintf(stderr, "Could not create an OpenGL 3.3 core context\n"); return 1; }
+    if (!glLoadFunctions()) return 1;
+    ShowWindow(A.hwnd, SW_SHOWDEFAULT); UpdateWindow(A.hwnd);
 
     IMGUI_CHECKVERSION(); ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable | ImGuiConfigFlags_NavEnableKeyboard;
     ImGui::StyleColorsDark();
-    ImGui_ImplGlfw_InitForOpenGL(A.win, true);
+    ImGui::GetStyle().ScaleAllSizes(dpi);
+    ImGui::GetStyle().FontScaleDpi = dpi;
+    ImGui_ImplWin32_InitForOpenGL(A.hwnd);
     ImGui_ImplOpenGL3_Init("#version 330");
 
     A.progMesh = makeProgram(VS_MESH, FS_MESH); A.progLine = makeProgram(VS_LINE, FS_LINE); A.progTex = makeProgram(VS_TEX, FS_TEX);
@@ -929,8 +1058,13 @@ int main() {
     A.part.init(A.sim);
     useBuiltin(0);
 
-    while (!glfwWindowShouldClose(A.win)) {
-        glfwPollEvents();
+    for (bool quit = false; !quit;) {
+        MSG msg;
+        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg); DispatchMessageW(&msg);
+            if (msg.message == WM_QUIT) quit = true;
+        }
+        if (quit) break;
         if (!g_drop.empty()) { std::snprintf(A.path, sizeof(A.path), "%s", g_drop.c_str()); loadAndApply(g_drop); g_drop.clear(); }
 
         // ---- solver ----
@@ -940,9 +1074,9 @@ int main() {
             A.sim.tau0 = 3.f * nuLB + 0.5f;
         }
         if (A.running && !A.sim.diverged) {
-            double t0 = glfwGetTime(); int n = 0;
-            do { A.sim.step(); ++n; } while (glfwGetTime() - t0 < A.budgetMs * 1e-3 && n < 200 && !A.sim.diverged);
-            double dt = glfwGetTime() - t0;
+            double t0 = nowSeconds(); int n = 0;
+            do { A.sim.step(); ++n; } while (nowSeconds() - t0 < A.budgetMs * 1e-3 && n < 200 && !A.sim.diverged);
+            double dt = nowSeconds() - t0;
             if (dt > 0) A.mlups = 0.9 * A.mlups + 0.1 * (n * (double)A.sim.N / 1e6 / dt);
             int Ac = A.refMode == 0 ? A.areaFront : A.areaPlan;
             double q = 0.5 * A.sim.uLB * A.sim.uLB * Ac;
@@ -951,19 +1085,23 @@ int main() {
         }
         if (A.part.on) A.part.step(A.sim);
 
+        // Minimised: keep the solver going, skip drawing (no vsync to throttle us here).
+        if (IsIconic(A.hwnd)) { if (!A.running) Sleep(10); continue; }
+
         // ---- UI ----
-        ImGui_ImplOpenGL3_NewFrame(); ImGui_ImplGlfw_NewFrame(); ImGui::NewFrame();
+        ImGui_ImplOpenGL3_NewFrame(); ImGui_ImplWin32_NewFrame(); ImGui::NewFrame();
         drawDockspace(); drawControls(); drawResults(); drawViewport();
         ImGui::Render();
 
-        int fbw, fbh; glfwGetFramebufferSize(A.win, &fbw, &fbh);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0); glViewport(0, 0, fbw, fbh);
+        RECT rc; GetClientRect(A.hwnd, &rc);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0); glViewport(0, 0, rc.right - rc.left, rc.bottom - rc.top);
         glClearColor(0.06f, 0.06f, 0.07f, 1.f); glClear(GL_COLOR_BUFFER_BIT);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-        glfwSwapBuffers(A.win);
+        SwapBuffers(A.hdc);
     }
 
-    ImGui_ImplOpenGL3_Shutdown(); ImGui_ImplGlfw_Shutdown(); ImGui::DestroyContext();
-    glfwDestroyWindow(A.win); glfwTerminate();
+    ImGui_ImplOpenGL3_Shutdown(); ImGui_ImplWin32_Shutdown(); ImGui::DestroyContext();
+    wglMakeCurrent(nullptr, nullptr); wglDeleteContext(A.glrc);
+    UnregisterClassW(wc.lpszClassName, wc.hInstance);   // window is already gone (WM_DESTROY ended the loop)
     return 0;
 }
