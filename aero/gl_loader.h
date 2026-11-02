@@ -1,6 +1,6 @@
 // ============================================================================
 //  Minimal OpenGL 3.3 core function loader for Windows (WGL).
-//  Only the entry points main.cpp uses; add new ones to AERO_GL_FUNCS.
+//  Only the entry points the app uses; add new ones to AERO_GL_FUNCS.
 // ============================================================================
 #pragma once
 #include <GL/glcorearb.h>
@@ -14,6 +14,7 @@
     X(PFNGLBINDTEXTUREPROC,             glBindTexture) \
     X(PFNGLBINDVERTEXARRAYPROC,         glBindVertexArray) \
     X(PFNGLBLENDFUNCPROC,               glBlendFunc) \
+    X(PFNGLBLITFRAMEBUFFERPROC,         glBlitFramebuffer) \
     X(PFNGLBUFFERDATAPROC,              glBufferData) \
     X(PFNGLBUFFERSUBDATAPROC,           glBufferSubData) \
     X(PFNGLCLEARPROC,                   glClear) \
@@ -46,6 +47,7 @@
     X(PFNGLGETUNIFORMLOCATIONPROC,      glGetUniformLocation) \
     X(PFNGLLINKPROGRAMPROC,             glLinkProgram) \
     X(PFNGLRENDERBUFFERSTORAGEPROC,     glRenderbufferStorage) \
+    X(PFNGLRENDERBUFFERSTORAGEMULTISAMPLEPROC, glRenderbufferStorageMultisample) \
     X(PFNGLSHADERSOURCEPROC,            glShaderSource) \
     X(PFNGLTEXIMAGE2DPROC,              glTexImage2D) \
     X(PFNGLTEXPARAMETERIPROC,           glTexParameteri) \

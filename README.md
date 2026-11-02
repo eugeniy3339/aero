@@ -32,31 +32,36 @@ The application uses Win32, WGL, and OpenGL 3.3. No separate dependency download
 
 ## Using the application
 
+The window opens maximized with three panels: **Controls** on the left, the 3D **Viewport** in the middle and **Results** on the right. Panels can be dragged and re-docked; **View → Reset panel layout** restores the default arrangement. A status bar at the bottom shows the grid size, step count, throughput and whether the solver is running.
+
 ### Load and position a model
 
-1. In **Model**, click **Pick file** and select an `.fbx`, `.obj`, or `.stl` file. You can also drag a model file onto the application window.
-2. Click **Load** to import the selected file. Alternatively, choose a built-in sphere or NACA 2412 wing and click **Use built-in**.
-3. Adjust **Size**, **Length**, **Position X**, and the pitch, yaw, and roll controls. Enable **Model is Z-up** when appropriate for the source model.
-4. If you change the simulation grid, click **Rebuild domain** in **Domain**.
+1. Click **Open model...** (or press **Ctrl+O**) and select an `.fbx`, `.obj`, or `.stl` file. The model loads immediately. You can also type a path and press Enter, or drag a model file onto the window.
+2. Alternatively, choose a built-in sphere or NACA 2412 wing from the **Built-in** list or **File → Built-in model**.
+3. Under **Placement**, adjust **Size**, **Length**, **Position X**, and the pitch, yaw, and roll controls. Enable **Z-up model** when appropriate for the source model. Hover a label for a short explanation.
+4. To change the simulation grid, edit **Grid** in **Domain** and click **Rebuild domain**.
 
 ### Run the flow
 
-Set the wind speed, air density, and kinematic viscosity in **Flow**, then click **Run** in **Simulation**. **Lattice velocity** is applied when the flow is reset. Use **Reset flow** to restart the solver and clear the force-history plots. **Budget (ms/frame)** controls how much solver work can be done in each rendered frame.
+Set the wind speed, air density, and kinematic viscosity in **Flow**, then click **Run** (or press **Space**). **Lattice velocity** is applied when the flow is reset; the panel offers an **Apply** button when it has changed. **Reset flow** (**R**) restarts the solver and clears the force-history plots. **Budget** controls how much solver time is spent per rendered frame.
 
-Allow the flow to develop for several domain flow-throughs before interpreting the force coefficients. The Results panel reports the number of solver steps and throughput as well as the force and coefficient estimates.
+The **Convergence** bar in Results shows how many times the free stream has crossed the domain. Wait for about three flow-throughs before interpreting the force coefficients.
 
 ### Explore the viewport
 
-- Left-drag to orbit the camera.
-- Right- or middle-drag to pan.
-- Use the mouse wheel to zoom.
-- In **Visualisation**, toggle the domain box, slice, and streamlines. Choose the slice axis, position, and field; adjust the display ranges and particle trails as needed.
-- Surface colouring can show the pressure coefficient. **Reset camera** restores the default view.
+- Left-drag to orbit the camera, right- or middle-drag to pan, and use the mouse wheel to zoom. Double-click or press **F** to reset the camera.
+- The toolbar above the viewport toggles the domain box, slice, streamlines, and surface pressure colouring, and selects the slice field. A colour legend and an axis gizmo are drawn over the view; the inlet face of the domain box is green.
+- Slice axis, position, colour range and opacity, and the streamline settings are under **Visualisation** in Controls.
+- **Help → Controls** (**F1**) lists all mouse and keyboard shortcuts.
 
 ## Project layout
 
-- `aero/main.cpp` — application, model import, solver, visualisation, and UI.
-- `aero/gl_loader.cpp` and `aero/gl_loader.h` — OpenGL function loading.
+- `aero/main.cpp` — Win32 window, OpenGL context, and main loop.
+- `aero/lbm.cpp` — lattice-Boltzmann solver.
+- `aero/model.cpp` — model import and built-in shapes.
+- `aero/scene.cpp` — voxelisation, simulation driving, and 3D rendering.
+- `aero/ui.cpp` — Dear ImGui interface.
+- `aero/gfx.cpp`, `aero/gl_loader.cpp` — OpenGL helpers and function loading.
 - `aero/aero.vcxproj` and `aero.slnx` — Visual Studio project and solution.
 - `include/` — vendored Dear ImGui, GLM, ufbx, and OpenGL headers.
 
